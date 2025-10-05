@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Endless Runner — Beautiful HTML5 Game</title>
+<style>
+  :root{
+    --bg:#0f1724;
+    --panel: rgba(255,255,255,0.05);
+    --accent: #6ee7b7;
+    --muted: rgba(255,255,255,0.65);
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#071026 0%, #0f1724 100%);color:#fff}
+  .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box}
+  .game-panel{width:100%;max-width:980px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:14px;padding:14px;box-shadow:0 10px 30px rgba(2,6,23,0.6)}
+  header{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .title{display:flex;gap:12px;align-items:center}
+  .logo{width:44px;height:44px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#60a5fa);display:flex;align-items:center;justify-content:center;font-weight:700;color:#042;box-shadow:0 4px 10px rgba(0,0,0,0.3)}
+  h1{margin:0;font-size:18px}
+  .controls{display:flex;gap:8px;align-items:center}
+  button{background:var(--panel);border:1px solid rgba(255,255,255,0.04);color:var(--muted);padding:8px 12px;border-radius:10px;font-weight:600;cursor:pointer}
+  button.primary{background:linear-gradient(90deg,var(--accent),#60a5fa);color:#042}
+  .hud{display:flex;gap:10px;align-items:center}
+  .hud .item{background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:8px;font-size:13px}
+  canvas{display:block;width:100%;height:480px;border-radius:8px;background:linear-gradient(180deg,#87CEEB 0%, #135 100%);image-rendering:crisp-edges}
+  .mobile-controls{display:none;gap:10px;justify-content:center;margin-top:12px}
+  .touch-btn{flex:1;padding:12px;border-radius:12px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.15));border:1px solid rgba(255,255,255,0.04);font-weight:700}
+  .footer{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:13px;color:var(--muted)}
+  @media (max-width:720px){
+    canvas{height:360px}
+    .mobile-controls{display:flex}
+    .controls{display:none}
+  }
+  /* small UI */
+  .small{font-size:12px;color:var(--muted)}
+  .center{display:flex;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="game-panel" role="application" aria-label="Endless Runner game">
+    <header>
+      <div class="title">
+        <div class="logo">ER</div>
+        <div>
+          <h1>Endless Runner — jump, dodge, survive</h1>
+          <div class="small">Tap / Space to jump · Mobile-friendly · High-score saved</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="hud">
+          <div class="item" id="score">Score: 0</div>
+          <div class="item" id="level">Level: 1</div>
+          <div class="item" id="lives">Lives: 3</div>
+          <div class="item" id="highscore">High: 0</div>
+        </div>
+        <button id="pauseBtn">Pause</button>
+        <button id="restartBtn" class="primary">Restart</button>
+      </div>
+    </header>
+
+    <canvas id="gameCanvas" width="1200" height="600"></canvas>
+
+    <div class="mobile-controls">
+      <button class="touch-btn" id="jumpBtn">JUMP</button>
+      <button class="touch-btn" id="pauseBtnMobile">PAUSE</button>
+    </div>
+
+    <div class="footer">
+      <div class="small">Use Space / Up arrow to jump. The game speeds up as you score more.</div>
+      <div class="small">Want a custom player image? Replace the default sprite URL in the code.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+  Endless Runner — Canvas game
+  Features:
+  - Responsive canvas scaling
+  - Smooth physics-based jump
+  - Obstacles spawn with increasing speed (levels)
+  - Score & high score saved to localStorage
+  - Lives, pause, restart, mobile touch buttons
+  - Easy to swap in a player image
+*/
+
+(() => {
+  // ----- Config -----
+  const CONFIG = {
+    gravity: 2000,             // px/s^2
+    jumpVelocity: -720,        // px/s initial jump velocity
+    groundHeight: 120,         // visible ground height from bottom
+    spawnInterval: 1400,       // milliseconds (will decrease with difficulty)
+    baseSpeed: 420,            // px/s obstacle speed (will scale)
+    speedRamp: 0.012,          // how much speed increases per score
+    maxLives: 3,
+    scaleWidth: 1200,          // base canvas width for design; canvas auto-scales to CSS size
+  };
+
+  // ----- Canvas Setup -----
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // Responsive scaling: scale internal resolution to keep crisp while fitting CSS size
+  function resizeCanvas() {
+    const ratio = CONFIG.scaleWidth / canvas.clientWidth;
+    const scale = window.devicePixelRatio || 1;
+    canvas.width = Math.max(600, Math.floor(canvas.clientWidth * scale));
+    canvas.height = Math.max(400, Math.floor(canvas.clientHeight * scale));
+    ctx.setTransform(1,0,0,1,0,0); // reset transform
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // ----- Game State -----
+  let lastTime = performance.now();
+  let accumulator = 0;
+  let running = true;
+  let paused = false;
+
+  const state = {
+    player: {
+      x: 140,
+      y: 0, // will be set to ground
+      w: 60,
+      h: 64,
+      vy: 0,
+      onGround: false,
+      sprite: null, // Image optional
+      usingSprite: false,
+    },
+    obstacles: [],
+    parallax: [],
+    timeSinceSpawn: 0,
+    score: 0,
+    highscore: 0,
+    level: 1,
+    speed: CONFIG.baseSpeed,
+    lives: CONFIG.maxLives,
+    gameOver: false,
+    elapsed: 0
+  };
+
+  // Load highscore
+  const HS_KEY = 'endless_runner_highscore_v1';
+  state.highscore = parseInt(localStorage.getItem(HS_KEY)) || 0;
+  document.getElementById('highscore').textContent = 'High: ' + state.highscore;
+
+  // ----- Optional: load player image -----
+  // If you want a custom player image, set imageURL to a valid URL (same-origin or CORS-enabled).
+  // For example: const imageURL = 'https://example.com/my-player.png';
+  const imageURL = ''; // <<-- put your player image URL here (optional)
+  if (imageURL) {
+    const img = new Image();
+    img.src = imageURL;
+    img.onload = () => {
+      state.player.sprite = img;
+      state.player.usingSprite = true;
+    };
+    img.onerror = () => { state.player.usingSprite = false; };
+  }
+
+  // ----- Utility -----
+  function rand(min, max){ return Math.random()*(max-min)+min; }
+
+  // ----- Initialize level parallax layers -----
+  function resetParallax() {
+    state.parallax = [
+      { speed: 0.12, color: '#0a2740', y: 60, h: 60, offset: 0 },
+      { speed: 0.28, color: '#123a5a', y: 120, h: 40, offset: 0 },
+      { speed: 0.6,  color: '#165a8b', y: 240, h: 30, offset: 0 }
+    ];
+  }
+  resetParallax();
+
+  // ----- Player / Physics -----
+  function resetPlayer() {
+    state.player.y = canvas.height - CONFIG.groundHeight - state.player.h;
+    state.player.vy = 0;
+    state.player.onGround = true;
+  }
+
+  // ----- Controls -----
+  function jump() {
+    if (state.gameOver || paused) return;
+    if (state.player.onGround) {
+      state.player.vy = CONFIG.jumpVelocity;
+      state.player.onGround = false;
+      // small score reward for perfect timing? (optional)
+    }
+  }
+  // Keyboard
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+      e.preventDefault();
+      jump();
+    } else if (e.code === 'KeyP') {
+      togglePause();
+    }
+  });
+  // Touch / mobile
+  document.getElementById('jumpBtn').addEventListener('touchstart', (e)=>{ e.preventDefault(); jump(); });
+  document.getElementById('jumpBtn').addEventListener('mousedown', (e)=>{ e.preventDefault(); jump(); });
+  document.getElementById('pauseBtnMobile').addEventListener('click', togglePause);
+
+  // UI Buttons
+  document.getElementById('pauseBtn').addEventListener('click', togglePause);
+  document.getElementById('restartBtn').addEventListener('click', restartGame);
+
+  function togglePause(){
+    if (state.gameOver) return;
+    paused = !paused;
+    document.getElementById('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
+    document.getElementById('pauseBtnMobile').textContent = paused ? 'RESUME' : 'PAUSE';
+  }
+
+  // ----- Obstacles -----
+  function spawnObstacle() {
+    // vary size and type
+    const height = Math.round(rand(28, 120));
+    const width = Math.round(rand(26, 70));
+    const gapFromRight = 30;
+    const y = canvas.height - CONFIG.groundHeight - height;
+    state.obstacles.push({
+      x: canvas.width + gapFromRight,
+      y,
+      w: width,
+      h: height,
+      passed: false
+    });
+  }
+
+  // ----- Game reset / restart -----
+  function restartGame() {
+    state.obstacles = [];
+    state.score = 0;
+    state.level = 1;
+    state.speed = CONFIG.baseSpeed;
+    state.lives = CONFIG.maxLives;
+    state.gameOver = false;
+    state.elapsed = 0;
+    state.timeSinceSpawn = 0;
+    paused = false;
+    document.getElementById('pauseBtn').textContent = 'Pause';
+    resetParallax();
+    resetPlayer();
+  }
+  restartGame();
+
+  // ----- Collision detection -----
+  function rectsOverlap(a,b){
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  // ----- Game loop -----
+  function update(dt) {
+    if (paused || state.gameOver) return;
+
+    state.elapsed += dt;
+    // Player physics
+    state.player.vy += CONFIG.gravity * dt;
+    state.player.y += state.player.vy * dt;
+
+    const groundY = canvas.height - CONFIG.groundHeight - state.player.h;
+    if (state.player.y >= groundY) {
+      state.player.y = groundY;
+      state.player.vy = 0;
+      state.player.onGround = true;
+    }
+
+    // spawn obstacles
+    state.timeSinceSpawn += dt*1000;
+    const spawnEvery = Math.max(520, CONFIG.spawnInterval - state.score * 6); // spawn faster as score grows
+    if (state.timeSinceSpawn > spawnEvery) {
+      spawnObstacle();
+      state.timeSinceSpawn = 0;
+    }
+
+    // update obstacles
+    const spd = state.speed + state.score * CONFIG.speedRamp * 60; // scale by score
+    for (let i = state.obstacles.length-1; i>=0; i--) {
+      const obs = state.obstacles[i];
+      obs.x -= spd * dt;
+      // passed?
+      if (!obs.passed && obs.x + obs.w < state.player.x) {
+        obs.passed = true;
+        state.score += 10;
+        // increase difficulty occasionally
+        if (state.score % 100 === 0) {
+          state.level++;
+          state.speed += 60;
+        }
+      }
+      // remove offscreen
+      if (obs.x + obs.w < -50) state.obstacles.splice(i,1);
+      else {
+        // collision
+        const pbox = { x: state.player.x+6, y: state.player.y+6, w:state.player.w-12, h:state.player.h-12 };
+        if (rectsOverlap(pbox, obs)) {
+          // lose a life and temporarily remove obstacle
+          state.obstacles.splice(i,1);
+          state.lives--;
+          if (state.lives <= 0) {
+            state.gameOver = true;
+            // update highscore if needed
+            if (state.score > state.highscore) {
+              state.highscore = state.score;
+              localStorage.setItem(HS_KEY, state.highscore);
+              document.getElementById('highscore').textContent = 'High: ' + state.highscore;
+            }
+          }
+        }
+      }
+    }
+
+    // parallax scroll update
+    for (const layer of state.parallax) {
+      layer.offset += layer.speed * (spd/200) * dt * 100;
+    }
+
+    // update UI
+    document.getElementById('score').textContent = 'Score: ' + state.score;
+    document.getElementById('level').textContent = 'Level: ' + state.level;
+    document.getElementById('lives').textContent = 'Lives: ' + state.lives;
+    // minor speed ramp
+    state.speed = Math.min(1200, CONFIG.baseSpeed + state.level*20 + state.score*0.04);
+  }
+
+  // ----- Rendering -----
+  function drawRoundedRect(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function render() {
+    // clear
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // scale draw to canvas size nicely (we designed for scaleWidth)
+    // Not strictly necessary, but keep positions relative
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // sky gradient background
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0, '#7ad0ff');
+    g.addColorStop(0.5, '#57a5d6');
+    g.addColorStop(1, '#0a2340');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    // parallax layers (distant hills)
+    for (const layer of state.parallax) {
+      ctx.save();
+      ctx.translate(- (layer.offset % (W+300)), 0);
+      ctx.fillStyle = layer.color;
+      const reps = 3;
+      for (let i= -1; i<reps; i++){
+        const px = i*(W+300) + layer.offset*0.0;
+        ctx.beginPath();
+        ctx.ellipse(px + W*0.5, H - CONFIG.groundHeight - layer.y, W*0.7, layer.h, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // ground
+    ctx.fillStyle = '#0b2233';
+    drawRoundedRect(0, H - CONFIG.groundHeight, W, CONFIG.groundHeight, 8);
+
+    // subtle grid / track lines
+    ctx.fillStyle = 'rgba(255,255,255,0.02)';
+    for (let i=0;i<6;i++){
+      ctx.fillRect(0, H - CONFIG.groundHeight + 12 + i*18, W, 6);
+    }
+
+    // obstacles
+    for (const obs of state.obstacles) {
+      // draw with a shadow and gradient
+      const grd = ctx.createLinearGradient(obs.x, obs.y, obs.x+obs.w, obs.y+obs.h);
+      grd.addColorStop(0, '#ffb86b');
+      grd.addColorStop(1, '#ff7a7a');
+      ctx.fillStyle = grd;
+      drawRoundedRect(obs.x, obs.y, obs.w, obs.h, 6);
+      // small highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(obs.x+6, obs.y+6, Math.min(obs.w-12, 30), 6);
+    }
+
+    // player
+    const p = state.player;
+    if (p.usingSprite && p.sprite) {
+      // draw sprite centered
+      ctx.drawImage(p.sprite, p.x, p.y, p.w, p.h);
+    } else {
+      // nice player design with gradient and eye
+      const pg = ctx.createLinearGradient(p.x, p.y, p.x+p.w, p.y+p.h);
+      pg.addColorStop(0, '#ffd166');
+      pg.addColorStop(1, '#f97316');
+      ctx.fillStyle = pg;
+      drawRoundedRect(p.x, p.y, p.w, p.h, 10);
+
+      // eye
+      ctx.fillStyle = '#042';
+      ctx.beginPath();
+      ctx.ellipse(p.x + p.w*0.7, p.y + p.h*0.35, 6, 6, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillRect(p.x + p.w*0.62, p.y + p.h*0.32, 3, 3);
+    }
+
+    // HUD overlay when paused or game over
+    if (paused) {
+      ctx.fillStyle = 'rgba(2,6,23,0.6)';
+      ctx.fillRect(W*0.12, H*0.2, W*0.76, H*0.3);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 30px Inter, system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('PAUSED', W/2, H*0.35);
+      ctx.font = '16px Inter, system-ui';
+      ctx.fillText('Tap Resume or press P / Pause to continue', W/2, H*0.42);
+    }
+
+    if (state.gameOver) {
+      ctx.fillStyle = 'rgba(2,6,23,0.7)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 36px Inter, system-ui';
+      ctx.fillText('GAME OVER', W/2, H*0.38);
+      ctx.font = '18px Inter, system-ui';
+      ctx.fillText('Score: ' + state.score + '  •  High: ' + state.highscore, W/2, H*0.46);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillRect(W*0.38, H*0.55, W*0.24, 44);
+      ctx.fillRect(W*0.6, H*0.55, W*0.24, 44);
+      ctx.fillStyle = '#042';
+      ctx.font = 'bold 16px Inter, system-ui';
+      ctx.fillText('Restart', W*0.5 - W*0.12, H*0.58);
+      ctx.fillText('Main Menu', W*0.5 + W*0.22, H*0.58);
+    }
+  }
+
+  // ----- Main loop runner -----
+  function loop(now) {
+    const dt = Math.min(0.033, (now - lastTime)/1000); // clamp dt to ~30fps step max
+    lastTime = now;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // Expose restart to UI click inside canvas when game over
+  canvas.addEventListener('click', (e) => {
+    if (!state.gameOver) return;
+    // simple: clicking anywhere restarts
+    restartGame();
+  });
+
+  // initial draw
+  render();
+
+  // small autoplay friendly hint for mobile: allow first tap to start
+  canvas.addEventListener('touchstart', (e) => {
+    if (state.gameOver) restartGame();
+  });
+})();
+</script>
+</body>
+</html>
